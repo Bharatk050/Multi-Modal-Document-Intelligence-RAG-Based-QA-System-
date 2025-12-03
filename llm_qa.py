@@ -1,18 +1,22 @@
-from langchain_huggingface import HuggingFacePipeline
 from langchain_community.llms import HuggingFacePipeline
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 import torch
 
 class LLMQA:
-    def __init__(self, model_name='google/flan-t5-base'):
+    def __init__(self, model_name='google/flan-t5-small'):
         print(f"Loading LLM model via LangChain: {model_name}")
         
         device = 0 if torch.cuda.is_available() else -1
         device_name = 'GPU' if device == 0 else 'CPU'
         
         try:
+            print(f"Downloading/loading tokenizer and model (this may take a moment)...")
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            model = AutoModelForSeq2SeqLM.from_pretrained(
+                model_name,
+                low_cpu_mem_usage=True,  # Reduce memory usage
+                torch_dtype=torch.float32
+            )
             
             pipe = pipeline(
                 "text2text-generation",
@@ -36,7 +40,13 @@ Answer:"""
             print(f"LangChain LLM loaded on {device_name}")
             
         except Exception as e:
-            print(f"Error loading model: {e}")
+            error_msg = str(e)
+            print(f"Error loading model: {error_msg}")
+            if "paging file" in error_msg.lower() or "memory" in error_msg.lower():
+                print("\n⚠️  MEMORY ERROR DETECTED:")
+                print("   - Your system may not have enough RAM to load this model")
+                print("   - Try closing other applications")
+                print("   - The app will fall back to SimpleQA mode")
             raise
     
     def generate_answer(self, query, context_chunks):
@@ -65,55 +75,88 @@ Answer:"""
         context_chunks = [result['chunk'] for result in search_results]
         
         answer = self.generate_answer(query, context_chunks)
+        
+        # Format the answer nicely
+        formatted_answer = f"💬 **Answer:**\n\n{answer}"
        
         citations = []
         for i, result in enumerate(search_results[:3]):
             chunk = result['chunk']
+            content = chunk.get('content', '')
             citations.append({
                 'rank': i + 1,
                 'source': chunk['source'],
-                'page': chunk['page'],
-                'type': chunk['type'],
-                'relevance_score': result['score']
+                'page': chunk.get('page', 'N/A'),
+                'type': chunk.get('type', 'text'),
+                'relevance_score': result['score'],
+                'preview': content[:100].strip() + "..." if len(content) > 100 else content.strip()
             })
         
         return {
-            'answer': answer,
+            'answer': formatted_answer,
             'citations': citations,
             'context_used': len(context_chunks)
         }
 
 class SimpleQA:
     def __init__(self):
-        print()
+        print("✓ SimpleQA initialized (no LLM model required)")
     
     def generate_answer_with_citations(self, query, search_results):
         if not search_results:
             return {
-                'answer': "No relevant information found in the document.",
+                'answer': "❌ **No relevant information found in the document.**",
                 'citations': [],
                 'context_used': 0
             }
         top_chunks = search_results[:3]
         
+        # Build formatted answer with excerpts
         answer_parts = []
-        for result in top_chunks:
+        answer_parts.append("📄 **Here's what I found in the document:**\n")
+        
+        for i, result in enumerate(top_chunks):
             chunk = result['chunk']
-            snippet = chunk['content'][:200].strip()
-            if snippet:
-                answer_parts.append(f"From {chunk['source']}: {snippet}...")
+            content = chunk['content'].strip()
+            
+            # Clean up the content - remove excessive whitespace
+            content = ' '.join(content.split())
+            
+            # Get a meaningful snippet (up to 300 chars)
+            snippet = content[:300].strip()
+            if len(content) > 300:
+                # Try to cut at a sentence or word boundary
+                last_period = snippet.rfind('.')
+                last_space = snippet.rfind(' ')
+                if last_period > 200:
+                    snippet = snippet[:last_period + 1]
+                elif last_space > 250:
+                    snippet = snippet[:last_space] + "..."
+                else:
+                    snippet = snippet + "..."
+            
+            # Format each excerpt as a quote block
+            source_type = chunk.get('type', 'text').capitalize()
+            type_emoji = "📝" if source_type == "Text" else "📊" if source_type == "Table" else "🖼️"
+            
+            answer_parts.append(
+                f"**{i+1}. {type_emoji} {chunk['source']}**\n"
+                f"> {snippet}\n"
+            )
         
-        answer = "\n\n".join(answer_parts) if answer_parts else "No relevant information found."
+        answer = "\n".join(answer_parts)
         
+        # Build citations with more details
         citations = []
         for i, result in enumerate(top_chunks):
             chunk = result['chunk']
             citations.append({
                 'rank': i + 1,
                 'source': chunk['source'],
-                'page': chunk['page'],
-                'type': chunk['type'],
-                'relevance_score': result['score']
+                'page': chunk.get('page', 'N/A'),
+                'type': chunk.get('type', 'text'),
+                'relevance_score': result['score'],
+                'preview': chunk['content'][:100].strip() + "..." if len(chunk['content']) > 100 else chunk['content'].strip()
             })
         
         return {

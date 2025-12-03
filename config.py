@@ -13,7 +13,8 @@ CHUNKS_PATH = os.path.join(PROCESSED_DATA_DIR, 'extracted_chunks.json')
 VECTOR_STORE_PATH = os.path.join(VECTOR_STORE_DIR, 'faiss_index')
 
 EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'
-LLM_MODEL = 'google/flan-t5-base'
+# Using smaller model to reduce memory usage
+LLM_MODEL = 'google/flan-t5-small'  # Changed from flan-t5-base to reduce memory footprint
 
 def create_directories():
     directories = [
